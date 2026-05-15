@@ -1,38 +1,223 @@
 <!doctype html>
-<html>
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <style>
-      body {
-        font-family: Arial, sans-serif;
-        width: 280px;
-        padding: 10px;
+      :root {
+        color-scheme: light;
+        --bg: #f8fafc;
+        --panel: #ffffff;
+        --text: #0f172a;
+        --muted: #475569;
+        --border: #dbe3ef;
+        --border-strong: #c7d2df;
+        --primary: #2563eb;
+        --primary-dark: #1d4ed8;
+        --ring: rgba(37, 99, 235, 0.22);
       }
-      label {
-        display: block;
-        margin: 8px 0;
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        width: 340px;
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+          "Segoe UI", sans-serif;
+      }
+
+      .popup {
+        padding: 18px;
+      }
+
+      .header {
+        margin-bottom: 16px;
+      }
+
+      .app-title {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0;
+        font-size: 18px;
+        font-weight: 750;
+        line-height: 1.25;
+        letter-spacing: 0;
+      }
+
+      .app-mark {
+        position: relative;
+        display: grid;
+        width: 34px;
+        height: 34px;
+        flex: 0 0 auto;
+        place-items: center;
+        border-radius: 8px;
+        background: linear-gradient(135deg, #2563eb 0%, #0f766e 100%);
+        box-shadow: 0 8px 18px rgba(37, 99, 235, 0.2);
+      }
+
+      .app-mark::before {
+        width: 15px;
+        height: 11px;
+        border: 2px solid #ffffff;
+        border-radius: 3px;
+        content: "";
+      }
+
+      .app-mark::after {
+        position: absolute;
+        top: 9px;
+        width: 6px;
+        height: 2px;
+        border-radius: 999px;
+        background: #ffffff;
+        content: "";
+      }
+
+      .control-stack {
+        display: grid;
+        gap: 8px;
+      }
+
+      .toggle {
+        display: flex;
+        align-items: flex-start;
+        gap: 10px;
+        min-height: 42px;
+        margin: 0;
+        padding: 10px 12px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        background: var(--panel);
+        cursor: pointer;
+      }
+
+      .toggle:hover {
+        border-color: var(--border-strong);
+      }
+
+      .toggle input {
+        width: 18px;
+        height: 18px;
+        flex: 0 0 auto;
+        margin: 1px 0 0;
+        accent-color: var(--primary);
+      }
+
+      .toggle span {
+        color: var(--text);
+        font-size: 14px;
+        font-weight: 600;
+        line-height: 1.35;
+      }
+
+      .divider {
+        height: 1px;
+        margin: 14px 0;
+        border: 0;
+        background: var(--border);
+      }
+
+      .manual {
+        display: grid;
+        gap: 10px;
+      }
+
+      .field-label {
+        margin: 0;
+        color: var(--muted);
+        font-size: 13px;
+        font-weight: 700;
+        line-height: 1.2;
+      }
+
+      .capture-row {
+        display: grid;
+        grid-template-columns: 88px 1fr;
+        gap: 8px;
+      }
+
+      #delay,
+      #take {
+        height: 38px;
+        border-radius: 8px;
+        font: inherit;
+      }
+
+      #delay {
+        width: 100%;
+        min-width: 0;
+        padding: 0 10px;
+        border: 1px solid var(--border-strong);
+        background: var(--panel);
+        color: var(--text);
+        font-size: 15px;
+        font-weight: 650;
+      }
+
+      #take {
+        min-width: 0;
+        padding: 0 14px;
+        border: 1px solid var(--primary);
+        background: var(--primary);
+        color: #ffffff;
+        font-size: 14px;
+        font-weight: 750;
+        cursor: pointer;
+        box-shadow: 0 8px 16px rgba(37, 99, 235, 0.18);
+      }
+
+      #take:hover {
+        border-color: var(--primary-dark);
+        background: var(--primary-dark);
+      }
+
+      input:focus-visible,
+      button:focus-visible {
+        outline: 3px solid var(--ring);
+        outline-offset: 2px;
       }
     </style>
   </head>
   <body>
-    <h3>Auto Fullpage Screenshot</h3>
-    <div>
-      <label
-        ><input id="enable" type="checkbox" /> Enable auto-capture on
-        navigation</label
-      >
-    </div>
-    <div>
-      <label
-        ><input id="clickCapture" type="checkbox" /> Capture on Shift+Click
-        (anywhere)</label
-      >
-    </div>
-    <hr />
-    <div>
-      <label>Manual capture delay (seconds)</label>
-      <input id="delay" type="number" min="0" value="3" style="width: 80px" />
-      <button id="take">Take after delay</button>
+    <div class="popup">
+      <header class="header">
+        <h1 class="app-title">
+          <span class="app-mark" aria-hidden="true"></span>
+          <span>Auto Fullpage Screenshot</span>
+        </h1>
+      </header>
+
+      <main>
+        <div class="control-stack">
+          <label class="toggle" for="enable">
+            <input id="enable" type="checkbox" />
+            <span>Enable auto-capture on navigation</span>
+          </label>
+
+          <label class="toggle" for="clickCapture">
+            <input id="clickCapture" type="checkbox" />
+            <span>Capture on Shift+Click anywhere</span>
+          </label>
+        </div>
+
+        <hr class="divider" />
+
+        <section class="manual" aria-labelledby="manual-delay-label">
+          <label id="manual-delay-label" class="field-label" for="delay">
+            Manual capture delay (seconds)
+          </label>
+          <div class="capture-row">
+            <input id="delay" type="number" min="0" value="3" />
+            <button id="take" type="button">Take after delay</button>
+          </div>
+        </section>
+      </main>
     </div>
     <script src="popup.js"></script>
   </body>
