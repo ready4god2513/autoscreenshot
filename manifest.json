@@ -1,0 +1,32 @@
+{
+  "manifest_version": 3,
+  "name": "Auto Fullpage Screenshot",
+  "description": "Automatically capture full-page screenshots on navigation and manual timed screenshots.",
+  "version": "0.1.0",
+  "permissions": [
+    "storage",
+    "downloads",
+    "scripting",
+    "tabs",
+    "webNavigation",
+    "activeTab",
+    "offscreen"
+  ],
+  "host_permissions": ["<all_urls>"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Auto Fullpage Screenshot"
+  },
+  "options_page": "options.html",
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle",
+      "all_frames": false
+    }
+  ]
+}
