@@ -1,6 +1,8 @@
 // background service worker
 
 const DEFAULT_FOLDER = "autoscreenshots";
+const MIN_CAPTURE_INTERVAL_MS = 700;
+let lastCaptureStartedAt = 0;
 
 async function getOptions() {
   return new Promise((res) =>
@@ -212,12 +214,39 @@ async function waitForScrollPosition(tabId, targetY) {
 }
 
 async function captureVisiblePng() {
-  return new Promise((resolve, reject) => {
-    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
-      if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
-      resolve(dataUrl);
-    });
-  });
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const elapsed = Date.now() - lastCaptureStartedAt;
+    if (elapsed < MIN_CAPTURE_INTERVAL_MS) {
+      await sleep(MIN_CAPTURE_INTERVAL_MS - elapsed);
+    }
+
+    lastCaptureStartedAt = Date.now();
+
+    try {
+      return await new Promise((resolve, reject) => {
+        chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+          if (chrome.runtime.lastError) {
+            reject(new Error(chrome.runtime.lastError.message));
+            return;
+          }
+          if (!dataUrl) {
+            reject(new Error("captureVisibleTab returned no image data"));
+            return;
+          }
+          resolve(dataUrl);
+        });
+      });
+    } catch (e) {
+      const message = String(e && e.message ? e.message : e);
+      const isRateLimit = message.includes(
+        "MAX_CAPTURE_VISIBLE_TAB_CALLS_PER_SECOND",
+      );
+      if (!isRateLimit || attempt === 3) throw e;
+      await sleep(MIN_CAPTURE_INTERVAL_MS * (attempt + 1));
+    }
+  }
+
+  throw new Error("captureVisibleTab failed");
 }
 
 function sleep(ms) {

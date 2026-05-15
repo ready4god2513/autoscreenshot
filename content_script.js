@@ -5,7 +5,16 @@ function handleClick(e) {
   // Use Shift+Click as the manual capture gesture to avoid accidental captures.
   if (!clickCaptureEnabled) return;
   if (!e.shiftKey) return;
-  chrome.runtime.sendMessage({ type: "manual_capture", delay: 0 });
+  try {
+    chrome.runtime.sendMessage({ type: "manual_capture", delay: 0 });
+  } catch (err) {
+    clickCaptureEnabled = false;
+    document.removeEventListener("click", handleClick, true);
+    console.warn(
+      "Auto Fullpage Screenshot was reloaded. Refresh this tab to re-enable Shift+Click capture.",
+      err,
+    );
+  }
 }
 
 function updateFromStorage(items) {
