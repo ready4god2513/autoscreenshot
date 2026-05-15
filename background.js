@@ -45,177 +45,44 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 async function captureFullPage(tabId) {
   if (!tabId) throw new Error("no tabId");
 
-  // Ask content script for page metrics
-  const metricsResult = await chrome.scripting.executeScript({
-    target: { tabId },
-    func: () => {
-      const root = document.documentElement;
-      const body = document.body;
-      const scroller = document.scrollingElement || root;
-      const totalHeight = Math.max(
-        scroller.scrollHeight,
-        root.scrollHeight,
-        body ? body.scrollHeight : 0,
-        root.offsetHeight,
-        body ? body.offsetHeight : 0,
-      );
-      const viewportHeight = window.innerHeight;
-      const viewportWidth = window.innerWidth;
-      const dpr = window.devicePixelRatio || 1;
-      const originalScroll =
-        window.scrollY ||
-        window.pageYOffset ||
-        scroller.scrollTop ||
-        root.scrollTop ||
-        (body ? body.scrollTop : 0) ||
-        0;
-      return {
-        totalHeight,
-        viewportHeight,
-        viewportWidth,
-        dpr,
-        originalScroll,
-      };
-    },
-  });
-
-  let { totalHeight, viewportHeight, viewportWidth, dpr, originalScroll } =
-    metricsResult[0].result;
-  let maxScrollY = Math.max(0, totalHeight - viewportHeight);
+  const initialMetrics = await getPageMetrics(tabId);
+  const { viewportWidth, dpr, originalScroll } = initialMetrics;
+  let totalHeight = initialMetrics.totalHeight;
+  let viewportHeight = initialMetrics.viewportHeight;
+  let maxScrollY = initialMetrics.maxScrollY;
   const images = [];
 
   // Scroll and capture each viewport
   let targetY = 0;
+  let lastCapturedY = -1;
   for (let i = 0; i < 200; i++) {
-    const scrollResult = await chrome.scripting.executeScript({
-      target: { tabId },
-      func: async (scrollY) => {
-        const root = document.documentElement;
-        const body = document.body;
-        const scroller = document.scrollingElement || root;
-        const previousRootBehavior = root.style.scrollBehavior;
-        const previousBodyBehavior = body ? body.style.scrollBehavior : "";
+    await scrollPageTo(tabId, targetY);
+    const captured = await waitForScrollPosition(tabId, targetY);
 
-        const getMetrics = () => {
-          const viewportHeight = window.innerHeight || root.clientHeight;
-          const totalHeight = Math.max(
-            scroller.scrollHeight,
-            root.scrollHeight,
-            body ? body.scrollHeight : 0,
-            root.offsetHeight,
-            body ? body.offsetHeight : 0,
-          );
-          return {
-            maxScrollY: Math.max(0, totalHeight - viewportHeight),
-            totalHeight,
-            viewportHeight,
-          };
-        };
-
-        const getY = () =>
-          window.scrollY ||
-          window.pageYOffset ||
-          scroller.scrollTop ||
-          root.scrollTop ||
-          (body ? body.scrollTop : 0) ||
-          0;
-
-        const scrollInstantly = (y) => {
-          try {
-            window.scrollTo({ left: 0, top: y, behavior: "instant" });
-          } catch (e) {
-            window.scrollTo(0, y);
-          }
-          scroller.scrollTop = y;
-          root.scrollTop = y;
-          if (body) body.scrollTop = y;
-        };
-
-        root.style.scrollBehavior = "auto";
-        if (body) body.style.scrollBehavior = "auto";
-
-        try {
-          let metrics = getMetrics();
-          const targetY = Math.max(0, Math.min(scrollY, metrics.maxScrollY));
-
-          for (let attempts = 0; attempts < 20; attempts++) {
-            scrollInstantly(targetY);
-            await new Promise((r) => setTimeout(r, 50));
-            metrics = getMetrics();
-            if (Math.abs(getY() - targetY) <= 2) break;
-          }
-
-          await new Promise((r) => requestAnimationFrame(() => r()));
-          await new Promise((r) => requestAnimationFrame(() => r()));
-
-          metrics = getMetrics();
-          return {
-            y: getY(),
-            maxScrollY: metrics.maxScrollY,
-            totalHeight: metrics.totalHeight,
-            viewportHeight: metrics.viewportHeight,
-          };
-        } finally {
-          root.style.scrollBehavior = previousRootBehavior;
-          if (body) body.style.scrollBehavior = previousBodyBehavior;
-        }
-      },
-      args: [targetY],
-    });
-
-    // small delay for layout
-    await new Promise((r) => setTimeout(r, 100));
+    if (i > 0 && captured.scrollY <= lastCapturedY + 2) break;
 
     // capture visible
-    const data = await new Promise((resolve, reject) => {
-      chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
-        if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
-        resolve(dataUrl);
-      });
-    });
+    const data = await captureVisiblePng();
 
-    const captured = scrollResult[0].result;
     totalHeight = Math.max(totalHeight, captured.totalHeight);
     viewportHeight = captured.viewportHeight || viewportHeight;
     maxScrollY = Math.max(maxScrollY, captured.maxScrollY);
-    images.push({ dataUrl: data, y: captured.y });
+    images.push({ dataUrl: data, y: captured.scrollY });
+    lastCapturedY = captured.scrollY;
 
-    if (captured.y >= maxScrollY - 2) break;
+    if (captured.scrollY >= maxScrollY - 2) break;
 
-    const nextY = Math.min(captured.y + viewportHeight, maxScrollY);
-    if (nextY <= captured.y + 2) break;
+    const nextY = Math.min(captured.scrollY + viewportHeight, maxScrollY);
+    if (nextY <= captured.scrollY + 2) break;
     targetY = nextY;
   }
 
   // restore original scroll
-  await chrome.scripting.executeScript({
-    target: { tabId },
-    func: (y) => {
-      const root = document.documentElement;
-      const body = document.body;
-      const scroller = document.scrollingElement || root;
-      const previousRootBehavior = root.style.scrollBehavior;
-      const previousBodyBehavior = body ? body.style.scrollBehavior : "";
+  await scrollPageTo(tabId, originalScroll);
 
-      root.style.scrollBehavior = "auto";
-      if (body) body.style.scrollBehavior = "auto";
-
-      try {
-        try {
-          window.scrollTo({ left: 0, top: y, behavior: "instant" });
-        } catch (e) {
-          window.scrollTo(0, y);
-        }
-        scroller.scrollTop = y;
-        root.scrollTop = y;
-        if (body) body.scrollTop = y;
-      } finally {
-        root.style.scrollBehavior = previousRootBehavior;
-        if (body) body.style.scrollBehavior = previousBodyBehavior;
-      }
-    },
-    args: [originalScroll],
-  });
+  if (!images.length) {
+    throw new Error("No viewport images captured");
+  }
 
   // Create offscreen document to stitch
   const url = "offscreen.html";
@@ -229,11 +96,12 @@ async function captureFullPage(tabId) {
   }
 
   // send images to offscreen to stitch
-  const stitchResult = await new Promise((resolve) => {
+  const stitchResult = await new Promise((resolve, reject) => {
     const onResp = (m) => {
       if (m && m.type === "stitched" && m.tabId === tabId) {
         chrome.runtime.onMessage.removeListener(onResp);
-        resolve(m.dataUrl);
+        if (m.error) reject(new Error(m.error));
+        else resolve(m.dataUrl);
       }
     };
     chrome.runtime.onMessage.addListener(onResp);
@@ -258,4 +126,100 @@ async function captureFullPage(tabId) {
     filename,
     conflictAction: "uniquify",
   });
+}
+
+async function getPageMetrics(tabId) {
+  const result = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: () => {
+      const root = document.documentElement;
+      const body = document.body;
+      const scroller = document.scrollingElement || root;
+      const viewportHeight =
+        window.innerHeight || root.clientHeight || scroller.clientHeight;
+      const viewportWidth =
+        window.innerWidth || root.clientWidth || scroller.clientWidth;
+      const totalHeight = Math.max(
+        scroller.scrollHeight,
+        root.scrollHeight,
+        body ? body.scrollHeight : 0,
+        root.offsetHeight,
+        body ? body.offsetHeight : 0,
+        viewportHeight,
+      );
+      const scrollY =
+        window.scrollY ||
+        window.pageYOffset ||
+        scroller.scrollTop ||
+        root.scrollTop ||
+        (body ? body.scrollTop : 0) ||
+        0;
+
+      return {
+        totalHeight,
+        viewportHeight,
+        viewportWidth,
+        dpr: window.devicePixelRatio || 1,
+        scrollY,
+        maxScrollY: Math.max(0, totalHeight - viewportHeight),
+        originalScroll: scrollY,
+      };
+    },
+  });
+
+  return result[0].result;
+}
+
+async function scrollPageTo(tabId, y) {
+  await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (y) => {
+      const root = document.documentElement;
+      const body = document.body;
+      const scroller = document.scrollingElement || root;
+      const previousRootBehavior = root.style.scrollBehavior;
+      const previousBodyBehavior = body ? body.style.scrollBehavior : "";
+
+      root.style.scrollBehavior = "auto";
+      if (body) body.style.scrollBehavior = "auto";
+
+      try {
+        const targetY = Math.max(0, Number(y) || 0);
+        window.scrollTo(0, targetY);
+        scroller.scrollTop = targetY;
+        root.scrollTop = targetY;
+        if (body) body.scrollTop = targetY;
+      } finally {
+        root.style.scrollBehavior = previousRootBehavior;
+        if (body) body.style.scrollBehavior = previousBodyBehavior;
+      }
+    },
+    args: [y],
+  });
+}
+
+async function waitForScrollPosition(tabId, targetY) {
+  let metrics = await getPageMetrics(tabId);
+  for (let i = 0; i < 20; i++) {
+    const expectedY = Math.min(Math.max(0, targetY), metrics.maxScrollY);
+    if (Math.abs(metrics.scrollY - expectedY) <= 2) break;
+    await sleep(75);
+    metrics = await getPageMetrics(tabId);
+  }
+
+  await sleep(100);
+  return getPageMetrics(tabId);
+}
+
+async function captureVisiblePng() {
+  return new Promise((resolve, reject) => {
+    chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
+      if (chrome.runtime.lastError) return reject(chrome.runtime.lastError);
+      resolve(dataUrl);
+    });
+  });
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
