@@ -46,17 +46,29 @@ async function captureFullPage(tabId) {
   if (!tabId) throw new Error("no tabId");
 
   // Ask content script for page metrics
-  const metrics = await chrome.scripting.executeScript({
+  const metricsResult = await chrome.scripting.executeScript({
     target: { tabId },
     func: () => {
+      const root = document.documentElement;
+      const body = document.body;
+      const scroller = document.scrollingElement || root;
       const totalHeight = Math.max(
-        document.documentElement.scrollHeight,
-        document.body.scrollHeight,
+        scroller.scrollHeight,
+        root.scrollHeight,
+        body ? body.scrollHeight : 0,
+        root.offsetHeight,
+        body ? body.offsetHeight : 0,
       );
       const viewportHeight = window.innerHeight;
       const viewportWidth = window.innerWidth;
       const dpr = window.devicePixelRatio || 1;
-      const originalScroll = window.scrollY;
+      const originalScroll =
+        window.scrollY ||
+        window.pageYOffset ||
+        scroller.scrollTop ||
+        root.scrollTop ||
+        (body ? body.scrollTop : 0) ||
+        0;
       return {
         totalHeight,
         viewportHeight,
@@ -67,23 +79,92 @@ async function captureFullPage(tabId) {
     },
   });
 
-  const { totalHeight, viewportHeight, viewportWidth, dpr, originalScroll } =
-    metrics[0].result;
-  const steps = Math.ceil(totalHeight / viewportHeight);
+  let { totalHeight, viewportHeight, viewportWidth, dpr, originalScroll } =
+    metricsResult[0].result;
+  let maxScrollY = Math.max(0, totalHeight - viewportHeight);
   const images = [];
 
   // Scroll and capture each viewport
-  for (let i = 0; i < steps; i++) {
-    const y = i * viewportHeight;
-    // scroll the page
-    await chrome.scripting.executeScript({
+  let targetY = 0;
+  for (let i = 0; i < 200; i++) {
+    const scrollResult = await chrome.scripting.executeScript({
       target: { tabId },
-      func: (scrollY) => window.scrollTo(0, scrollY),
-      args: [y],
+      func: async (scrollY) => {
+        const root = document.documentElement;
+        const body = document.body;
+        const scroller = document.scrollingElement || root;
+        const previousRootBehavior = root.style.scrollBehavior;
+        const previousBodyBehavior = body ? body.style.scrollBehavior : "";
+
+        const getMetrics = () => {
+          const viewportHeight = window.innerHeight || root.clientHeight;
+          const totalHeight = Math.max(
+            scroller.scrollHeight,
+            root.scrollHeight,
+            body ? body.scrollHeight : 0,
+            root.offsetHeight,
+            body ? body.offsetHeight : 0,
+          );
+          return {
+            maxScrollY: Math.max(0, totalHeight - viewportHeight),
+            totalHeight,
+            viewportHeight,
+          };
+        };
+
+        const getY = () =>
+          window.scrollY ||
+          window.pageYOffset ||
+          scroller.scrollTop ||
+          root.scrollTop ||
+          (body ? body.scrollTop : 0) ||
+          0;
+
+        const scrollInstantly = (y) => {
+          try {
+            window.scrollTo({ left: 0, top: y, behavior: "instant" });
+          } catch (e) {
+            window.scrollTo(0, y);
+          }
+          scroller.scrollTop = y;
+          root.scrollTop = y;
+          if (body) body.scrollTop = y;
+        };
+
+        root.style.scrollBehavior = "auto";
+        if (body) body.style.scrollBehavior = "auto";
+
+        try {
+          let metrics = getMetrics();
+          const targetY = Math.max(0, Math.min(scrollY, metrics.maxScrollY));
+
+          for (let attempts = 0; attempts < 20; attempts++) {
+            scrollInstantly(targetY);
+            await new Promise((r) => setTimeout(r, 50));
+            metrics = getMetrics();
+            if (Math.abs(getY() - targetY) <= 2) break;
+          }
+
+          await new Promise((r) => requestAnimationFrame(() => r()));
+          await new Promise((r) => requestAnimationFrame(() => r()));
+
+          metrics = getMetrics();
+          return {
+            y: getY(),
+            maxScrollY: metrics.maxScrollY,
+            totalHeight: metrics.totalHeight,
+            viewportHeight: metrics.viewportHeight,
+          };
+        } finally {
+          root.style.scrollBehavior = previousRootBehavior;
+          if (body) body.style.scrollBehavior = previousBodyBehavior;
+        }
+      },
+      args: [targetY],
     });
 
     // small delay for layout
-    await new Promise((r) => setTimeout(r, 250));
+    await new Promise((r) => setTimeout(r, 100));
 
     // capture visible
     const data = await new Promise((resolve, reject) => {
@@ -92,13 +173,47 @@ async function captureFullPage(tabId) {
         resolve(dataUrl);
       });
     });
-    images.push({ dataUrl: data, y });
+
+    const captured = scrollResult[0].result;
+    totalHeight = Math.max(totalHeight, captured.totalHeight);
+    viewportHeight = captured.viewportHeight || viewportHeight;
+    maxScrollY = Math.max(maxScrollY, captured.maxScrollY);
+    images.push({ dataUrl: data, y: captured.y });
+
+    if (captured.y >= maxScrollY - 2) break;
+
+    const nextY = Math.min(captured.y + viewportHeight, maxScrollY);
+    if (nextY <= captured.y + 2) break;
+    targetY = nextY;
   }
 
   // restore original scroll
   await chrome.scripting.executeScript({
     target: { tabId },
-    func: (y) => window.scrollTo(0, y),
+    func: (y) => {
+      const root = document.documentElement;
+      const body = document.body;
+      const scroller = document.scrollingElement || root;
+      const previousRootBehavior = root.style.scrollBehavior;
+      const previousBodyBehavior = body ? body.style.scrollBehavior : "";
+
+      root.style.scrollBehavior = "auto";
+      if (body) body.style.scrollBehavior = "auto";
+
+      try {
+        try {
+          window.scrollTo({ left: 0, top: y, behavior: "instant" });
+        } catch (e) {
+          window.scrollTo(0, y);
+        }
+        scroller.scrollTop = y;
+        root.scrollTop = y;
+        if (body) body.scrollTop = y;
+      } finally {
+        root.style.scrollBehavior = previousRootBehavior;
+        if (body) body.style.scrollBehavior = previousBodyBehavior;
+      }
+    },
     args: [originalScroll],
   });
 
