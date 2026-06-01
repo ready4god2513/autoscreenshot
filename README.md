@@ -4,13 +4,14 @@ Features:
 
 - Automatically captures a stitched full-page PNG on each top-level navigation when enabled.
 - Manual timed capture from the popup (so you can open modals or menus before capture).
+- Start and stop a 5-second visible screenshot loop from the popup. This captures only the viewport currently in view and does not scroll the page.
 - Option to set a subfolder inside Downloads for saved screenshots.
 
 Limitations & notes:
 
 - Chrome extensions cannot write arbitrary filesystem paths; screenshots are saved via the downloads API into the user's Downloads folder (you can specify a subfolder name).
 - Full-page capture is done by scrolling the page and capturing viewports, then stitching in an offscreen document. Very tall pages may produce large images.
-- Full-page capture is done by scrolling the page and capturing viewports, then stitching in an offscreen document. Very tall pages may produce large images.
+- The visible screenshot loop runs in the active tab and skips captures while that tab or window is not in view.
 - Capture-on-click: the extension supports "Shift+Click" capture (toggleable in the popup). Hold Shift and click anywhere on the page to trigger a manual full-page capture. This avoids accidental captures while keeping the workflow quick.
 
 Install for development:

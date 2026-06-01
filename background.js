@@ -2,7 +2,9 @@
 
 const DEFAULT_FOLDER = "autoscreenshots";
 const MIN_CAPTURE_INTERVAL_MS = 700;
+const VISIBLE_INTERVAL_MS = 5000;
 let lastCaptureStartedAt = 0;
+const visibleCaptureInProgress = new Set();
 
 async function getOptions() {
   return new Promise((res) =>
@@ -41,6 +43,34 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     sendResponse({ started: true });
     return true;
   }
+
+  if (msg && msg.type === "visible_interval_capture") {
+    const tabId = sender.tab ? sender.tab.id : msg.tabId;
+    captureVisibleViewport(tabId).catch(console.error);
+    sendResponse({ started: true });
+    return true;
+  }
+
+  if (
+    msg &&
+    (msg.type === "visible_interval_start" ||
+      msg.type === "visible_interval_stop" ||
+      msg.type === "visible_interval_status")
+  ) {
+    const tabId = sender.tab ? sender.tab.id : msg.tabId;
+    const action = msg.type.replace("visible_interval_", "");
+    handleVisibleIntervalControl(tabId, action)
+      .then(sendResponse)
+      .catch((error) => {
+        console.error("visible interval control failed", error);
+        sendResponse({
+          running: false,
+          error: error && error.message ? error.message : String(error),
+        });
+      });
+    return true;
+  }
+
   return false;
 });
 
@@ -118,13 +148,98 @@ async function captureFullPage(tabId) {
   });
 
   // Download the stitched image
+  await downloadScreenshot(stitchResult, "screenshot");
+}
+
+async function captureVisibleViewport(tabId) {
+  if (!tabId || visibleCaptureInProgress.has(tabId)) return;
+
+  visibleCaptureInProgress.add(tabId);
+  try {
+    const tab = await chrome.tabs.get(tabId);
+    if (!tab || !tab.active) return;
+
+    const win = await chrome.windows.get(tab.windowId);
+    if (win && !win.focused) return;
+
+    const dataUrl = await captureVisiblePng(tab.windowId);
+    await downloadScreenshot(dataUrl, "viewport-screenshot");
+  } finally {
+    visibleCaptureInProgress.delete(tabId);
+  }
+}
+
+async function handleVisibleIntervalControl(tabId, action) {
+  if (!tabId) throw new Error("no tabId");
+
+  const [result] = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: (requestedAction, intervalMs) => {
+      const stateKey = "__autoScreenshotVisibleInterval";
+      const state =
+        globalThis[stateKey] ||
+        (globalThis[stateKey] = {
+          timerId: null,
+        });
+
+      const stop = () => {
+        if (state.timerId) {
+          clearInterval(state.timerId);
+          state.timerId = null;
+        }
+      };
+
+      const requestCapture = () => {
+        if (document.visibilityState !== "visible") return;
+
+        try {
+          chrome.runtime.sendMessage(
+            { type: "visible_interval_capture" },
+            () => {
+              if (!chrome.runtime.lastError) return;
+              stop();
+              console.warn(
+                "Auto Fullpage Screenshot stopped the visible capture loop.",
+                chrome.runtime.lastError.message,
+              );
+            },
+          );
+        } catch (error) {
+          stop();
+          console.warn(
+            "Auto Fullpage Screenshot stopped the visible capture loop.",
+            error,
+          );
+        }
+      };
+
+      if (requestedAction === "start") {
+        stop();
+        state.timerId = setInterval(requestCapture, intervalMs);
+        requestCapture();
+      } else if (requestedAction === "stop") {
+        stop();
+      }
+
+      return {
+        running: !!state.timerId,
+        intervalMs,
+      };
+    },
+    args: [action, VISIBLE_INTERVAL_MS],
+  });
+
+  return result.result;
+}
+
+async function downloadScreenshot(dataUrl, prefix) {
   const opts = await new Promise((r) =>
     chrome.storage.sync.get({ folder: DEFAULT_FOLDER }, r),
   );
   const folder = opts.folder || DEFAULT_FOLDER;
-  const filename = `${folder}/screenshot-${Date.now()}.png`;
+  const filename = `${folder}/${prefix}-${Date.now()}.png`;
   await chrome.downloads.download({
-    url: stitchResult,
+    url: dataUrl,
     filename,
     conflictAction: "uniquify",
   });
@@ -213,7 +328,7 @@ async function waitForScrollPosition(tabId, targetY) {
   return getPageMetrics(tabId);
 }
 
-async function captureVisiblePng() {
+async function captureVisiblePng(windowId = null) {
   for (let attempt = 0; attempt < 4; attempt++) {
     const elapsed = Date.now() - lastCaptureStartedAt;
     if (elapsed < MIN_CAPTURE_INTERVAL_MS) {
@@ -224,17 +339,21 @@ async function captureVisiblePng() {
 
     try {
       return await new Promise((resolve, reject) => {
-        chrome.tabs.captureVisibleTab(null, { format: "png" }, (dataUrl) => {
-          if (chrome.runtime.lastError) {
-            reject(new Error(chrome.runtime.lastError.message));
-            return;
-          }
-          if (!dataUrl) {
-            reject(new Error("captureVisibleTab returned no image data"));
-            return;
-          }
-          resolve(dataUrl);
-        });
+        chrome.tabs.captureVisibleTab(
+          windowId,
+          { format: "png" },
+          (dataUrl) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (!dataUrl) {
+              reject(new Error("captureVisibleTab returned no image data"));
+              return;
+            }
+            resolve(dataUrl);
+          },
+        );
       });
     } catch (e) {
       const message = String(e && e.message ? e.message : e);
